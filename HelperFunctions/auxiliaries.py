@@ -1,3 +1,5 @@
+import datetime
+
 import numpy as np
 from matplotlib import pyplot as plt
 
@@ -5,7 +7,7 @@ import pandas as pd
 import tensorflow as tf
 
 MAX_EPOCS = 20
-OUT_STEPS = 2920
+OUT_STEPS = 200
 
 class WindowGenerator():
     def __init__(self, input_width, label_width, shift,
@@ -13,24 +15,25 @@ class WindowGenerator():
                  label_columns = None):
         
         # Derive Original Data
-        orig_df = pd.read_csv(f'CleanCSV\{cv_name}.csv')
-        orig_df['timestamp'] = pd.DatetimeIndex(orig_df['timestamp'])
+        self.url_name = cv_name
+        self.orig_df = pd.read_csv(f'CleanCSV\\{cv_name}.csv')
+        self.orig_df['timestamp'] = pd.DatetimeIndex(self.orig_df['timestamp'])
 
-        self.date_time = pd.to_datetime(orig_df.pop('timestamp'))
+        self.date_time = pd.to_datetime(self.orig_df.pop('timestamp'))
 
         # If one position is desired, remove other position columns
         if label_columns == ['altitude']:
-            orig_df.drop(columns=['longitude', 'latitude'], inplace=True)
+            self.orig_df.drop(columns=['longitude', 'latitude'], inplace=True)
         elif label_columns == ['longitude']:
-            orig_df.drop(columns=['altitude', 'latitude'], inplace=True)
+            self.orig_df.drop(columns=['altitude', 'latitude'], inplace=True)
         elif label_columns == ['latitude']:
-            orig_df.drop(columns=['altitude', 'longitude'], inplace=True)
+            self.orig_df.drop(columns=['altitude', 'longitude'], inplace=True)
 
         # Split Data
-        n = len(orig_df)
-        self.train_df = orig_df[0:int(n*0.7)]
-        self.val_df = orig_df[int(n*0.7):int(n*0.9)]
-        self.test_df = orig_df[int(n*0.9):]
+        n = len(self.orig_df[:-(input_width + shift)])
+        self.train_df = self.orig_df[0:int(n*0.8)]
+        self.val_df = self.orig_df[int(n*0.8):int(n*0.9)]
+        self.test_df = self.orig_df[int(n*0.9):]
     
         # Normalize Data
         self.train_mean = self.train_df.mean(numeric_only=True)
@@ -63,6 +66,8 @@ class WindowGenerator():
         self.label_slice = slice(self.label_start, None)
         self.label_indices = np.arange(self.total_window_size)[self.label_slice]
         # self.label_indices = self.date_time[self.label_slice]
+
+        self.edge_df = (self.orig_df.iloc[-self.total_window_size:] - self.train_mean)/self.train_std
 
     def __repr__(self):
         return '\n'.join([
@@ -121,6 +126,38 @@ class WindowGenerator():
 
         plt.xlabel('Time [h]')
     
+    def extend_to_csv(self, model = None):
+        # Load edge data
+        input_section, label_section = next(iter(self.edge_data))
+
+        # Run Model
+        if (model is not None):
+            extended_data = model(label_section)[0].numpy()
+        else:
+            extended_data = [label_section.numpy()[-1][-1] for _ in range(self.label_width)]
+        
+        # Create Add-on Pandas Dataframe
+        base_df = self.orig_df
+        base_df['timestamp'] = self.date_time
+        base_df['modeled'] = False
+
+        add_on = pd.DataFrame(extended_data, columns=self.edge_df.columns)*self.train_std + self.train_mean
+        add_on['modeled'] = True
+
+        # Create timestamp index
+        start = max(self.date_time)
+        add_on_time_index = list()
+        for i in range(len(add_on)):
+            add_on_time_index.append(start + datetime.timedelta(hours=3*(i + 1)))
+        
+        add_on['timestamp'] = add_on_time_index
+
+        # Merge Add On and base
+        full_df = pd.concat([base_df, add_on], ignore_index=True)
+        full_df.set_index('timestamp', inplace=True)
+        
+        full_df.to_csv(f'ExtendedCSV\\{self.url_name}_extended.csv', index=True, index_label='timestamp')
+    
     def make_dataset(self, data):
         data = np.array(data, dtype=np.float32)
         ds = tf.keras.utils.timeseries_dataset_from_array(
@@ -147,6 +184,10 @@ class WindowGenerator():
         return self.make_dataset(self.test_df)
     
     @property
+    def edge_data(self):
+        return self.make_dataset(self.edge_df)
+    
+    @property
     def example(self):
         result = getattr(self, '_example', None)
         if result is None:
@@ -156,14 +197,14 @@ class WindowGenerator():
         return result
 
 class FeedBack(tf.keras.Model):
-    def __init__(self, units, out_steps):
+    def __init__(self, units, out_steps, num_vars):
         super().__init__()
         self.out_steps = out_steps
         self.units = units
         self.lstm_cell = tf.keras.layers.LSTMCell(units)
         # Also wrap the LSTMCell in an RNN to simplify the `warmup` method.
         self.lstm_rnn = tf.keras.layers.RNN(self.lstm_cell, return_state=True)
-        self.dense = tf.keras.layers.Dense(7)
+        self.dense = tf.keras.layers.Dense(num_vars)
 
     def warmup(self, inputs):
         # inputs.shape => (batch, time, features)

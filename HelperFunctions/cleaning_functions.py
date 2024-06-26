@@ -74,7 +74,7 @@ def basic_clean_moose(url_dest = 'CleanCSV\\Moose\\'):
 
     # Remove meta-data and individual string data
     raw_moose_data.drop(columns=['event-id', 'visible', 'sensor-type', 'individual-taxon-canonical-name', 'individual-local-identifier', 'study-name'], inplace=True)
-
+    raw_moose_data['gps:fix-type'] = raw_moose_data['gps:fix-type'].astype('float64')
 
     raw_moose_data.rename({'location-long': 'longitude', 'location-lat': 'latitude', 'height-above-ellipsoid': 'altitude'}, axis=1, inplace=True)
 
@@ -101,6 +101,8 @@ def interpolation_clean_moose(url_dest = 'CleanCSV\\Moose\\'):
 
     # Remove meta-data and individual string data
     raw_moose_data.drop(columns=['event-id', 'visible', 'sensor-type', 'individual-taxon-canonical-name', 'individual-local-identifier', 'study-name'], inplace=True)
+    raw_moose_data['gps:fix-type'] = raw_moose_data['gps:fix-type'].astype('float64')
+
     raw_moose_data.rename({'location-long': 'longitude', 'location-lat': 'latitude', 'height-above-ellipsoid': 'altitude'}, axis=1, inplace=True)
 
     for moose_tag in raw_moose_data['tag-local-identifier'].unique():
@@ -137,7 +139,6 @@ def interpolation_clean_moose(url_dest = 'CleanCSV\\Moose\\'):
 
         specific_moose.drop(columns=['to_keep'], inplace=True)
         specific_moose.to_csv(f'{url_dest}{moose_tag}_interpolated.csv', index=True, index_label='timestamp')
-
 
 if __name__ == '__main__':
     basic_clean_deer()
