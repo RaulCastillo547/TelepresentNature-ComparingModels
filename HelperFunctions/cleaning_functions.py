@@ -11,14 +11,14 @@ def basic_clean_deer(url_dest = 'CleanCSV\\Deer\\'):
     raw_deer_data.set_index('timestamp', inplace=True)
 
     # Drop empty columns and rows without latitude, longitude, or altitude
-    raw_deer_data.drop(columns=['comments', 'manually-marked-outlier', 'study-name', 'individual-taxon-canonical-name', 'sensor-type', 'individual-local-identifier', 'event-id', 'visible'], inplace=True)
+    raw_deer_data.drop(columns=['comments', 'manually-marked-outlier', 'study-name', 'individual-taxon-canonical-name', 'sensor-type', 'individual-local-identifier', 'event-id', 'visible', 'tag-tech-spec', 'tag-voltage'], inplace=True)
 
     # Rename columns
     raw_deer_data.rename({'location-long': 'longitude', 'location-lat': 'latitude', 'height-above-ellipsoid': 'altitude'}, axis=1, inplace=True)
 
     for local_id in list(raw_deer_data['tag-local-identifier'].unique()):
         one_deer_data = raw_deer_data[raw_deer_data['tag-local-identifier'] == local_id]
-        one_deer_data.loc[:, ['longitude', 'latitude', 'altitude']] = one_deer_data[['longitude', 'latitude', 'altitude']].interpolate('time')
+        one_deer_data.loc[:, ['longitude', 'latitude', 'altitude']] = one_deer_data[['longitude', 'latitude', 'altitude']].interpolate('time', limit_direction='both')
         one_deer_data.drop(columns=['tag-local-identifier'], inplace=True)
         one_deer_data.to_csv(f"{url_dest}{local_id}.csv", index=True)
 
@@ -30,7 +30,7 @@ def interpolation_clean_deer(url_dest = 'CleanCSV\\Deer\\'):
     raw_deer_data.set_index('timestamp', inplace=True)
 
     # Drop unneeded columns
-    raw_deer_data.drop(columns=['comments', 'manually-marked-outlier', 'study-name', 'individual-taxon-canonical-name', 'sensor-type', 'individual-local-identifier', 'event-id', 'visible'], inplace=True)
+    raw_deer_data.drop(columns=['comments', 'manually-marked-outlier', 'study-name', 'individual-taxon-canonical-name', 'sensor-type', 'individual-local-identifier', 'event-id', 'visible', 'tag-tech-spec', 'tag-voltage'], inplace=True)
 
     # Rename columns
     raw_deer_data.rename({'location-long': 'longitude', 'location-lat': 'latitude', 'height-above-ellipsoid': 'altitude'}, axis=1, inplace=True)
@@ -73,8 +73,7 @@ def basic_clean_moose(url_dest = 'CleanCSV\\Moose\\'):
     raw_moose_data['timestamp'] = pd.DatetimeIndex(raw_moose_data['timestamp'])
 
     # Remove meta-data and individual string data
-    raw_moose_data.drop(columns=['event-id', 'visible', 'sensor-type', 'individual-taxon-canonical-name', 'individual-local-identifier', 'study-name'], inplace=True)
-    raw_moose_data['gps:fix-type'] = raw_moose_data['gps:fix-type'].astype('float64')
+    raw_moose_data.drop(columns=['event-id', 'visible', 'sensor-type', 'individual-taxon-canonical-name', 'individual-local-identifier', 'study-name', 'gps:dop', 'gps:fix-type', 'tag-voltage'], inplace=True)
 
     raw_moose_data.rename({'location-long': 'longitude', 'location-lat': 'latitude', 'height-above-ellipsoid': 'altitude'}, axis=1, inplace=True)
 
@@ -100,8 +99,7 @@ def interpolation_clean_moose(url_dest = 'CleanCSV\\Moose\\'):
     raw_moose_data['timestamp'] = pd.DatetimeIndex(raw_moose_data['timestamp'])
 
     # Remove meta-data and individual string data
-    raw_moose_data.drop(columns=['event-id', 'visible', 'sensor-type', 'individual-taxon-canonical-name', 'individual-local-identifier', 'study-name'], inplace=True)
-    raw_moose_data['gps:fix-type'] = raw_moose_data['gps:fix-type'].astype('float64')
+    raw_moose_data.drop(columns=['event-id', 'visible', 'sensor-type', 'individual-taxon-canonical-name', 'individual-local-identifier', 'study-name', 'gps:dop', 'gps:fix-type', 'tag-voltage'], inplace=True)
 
     raw_moose_data.rename({'location-long': 'longitude', 'location-lat': 'latitude', 'height-above-ellipsoid': 'altitude'}, axis=1, inplace=True)
 

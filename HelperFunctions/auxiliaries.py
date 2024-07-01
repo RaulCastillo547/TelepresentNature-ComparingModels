@@ -5,13 +5,15 @@ from matplotlib import pyplot as plt
 
 import pandas as pd
 import tensorflow as tf
+import keras
 
 MAX_EPOCS = 20
-OUT_STEPS = 200
+OUT_STEPS = 100
 
 class WindowGenerator():
     def __init__(self, input_width, label_width, shift,
                  cv_name='Moose\\yl1',
+                 tail_index = None,
                  label_columns = None):
         
         # Derive Original Data
@@ -20,6 +22,7 @@ class WindowGenerator():
         self.orig_df['timestamp'] = pd.DatetimeIndex(self.orig_df['timestamp'])
 
         self.date_time = pd.to_datetime(self.orig_df.pop('timestamp'))
+        self.orig_df.pop('external-temperature')
 
         # If one position is desired, remove other position columns
         if label_columns == ['altitude']:
@@ -30,10 +33,13 @@ class WindowGenerator():
             self.orig_df.drop(columns=['altitude', 'longitude'], inplace=True)
 
         # Split Data
-        n = len(self.orig_df[:-(input_width + shift)])
-        self.train_df = self.orig_df[0:int(n*0.8)]
-        self.val_df = self.orig_df[int(n*0.8):int(n*0.9)]
-        self.test_df = self.orig_df[int(n*0.9):]
+        slice_df = self.orig_df[slice(tail_index, None)]
+        
+        n = len(slice_df)
+        self.train_df = slice_df[0:int(n*0.8)]
+        self.val_df = slice_df[int(n*0.8):int(n*0.9)]
+        self.test_df = slice_df[int(n*0.9):]
+        self.edge_df = slice_df.iloc[-(input_width + shift):]
     
         # Normalize Data
         self.train_mean = self.train_df.mean(numeric_only=True)
@@ -42,6 +48,7 @@ class WindowGenerator():
         self.train_df = (self.train_df - self.train_mean) / self.train_std
         self.val_df = (self.val_df - self.train_mean) / self.train_std
         self.test_df = (self.test_df - self.train_mean) / self.train_std
+        self.edge_df = (self.edge_df - self.train_mean) / self.train_std
 
         # Work out label column indices
         self.label_columns = label_columns
@@ -60,14 +67,47 @@ class WindowGenerator():
         # Slicing Input and label widths
         self.input_slice = slice(0, input_width)
         self.input_indices = np.arange(self.total_window_size)[self.input_slice]
-        # self.input_indices = self.date_time[self.input_slice]
 
         self.label_start = self.total_window_size - self.label_width
         self.label_slice = slice(self.label_start, None)
         self.label_indices = np.arange(self.total_window_size)[self.label_slice]
-        # self.label_indices = self.date_time[self.label_slice]
 
-        self.edge_df = (self.orig_df.iloc[-self.total_window_size:] - self.train_mean)/self.train_std
+    def extend_to_csv(self, url_dest, species, model = None):
+        # Load edge data
+        input_section, label_section = next(iter(self.edge_data))
+
+        # Run Model
+        if (model is not None):
+            extended_data = model(label_section)[0].numpy()
+        else:
+            extended_data = [label_section.numpy()[-1][-1] for _ in range(self.label_width)]
+        
+        # Create Add-on Pandas Dataframe
+        base_df = self.orig_df
+        base_df['timestamp'] = self.date_time
+        base_df['modeled'] = False
+
+        add_on = pd.DataFrame(extended_data, columns=self.edge_df.columns)*self.train_std + self.train_mean
+        add_on['modeled'] = True
+
+        # Create timestamp index
+        start = max(self.date_time)
+        add_on_time_index = list()
+        
+        if (species == 'Moose'):
+            for i in range(len(add_on)):
+                add_on_time_index.append(start + datetime.timedelta(hours=3*(i + 1)))
+        elif (species == 'Deer'):
+            for i in range(len(add_on)):
+                add_on_time_index.append(start + datetime.timedelta(hours=4*(i + 1)))
+        
+        add_on['timestamp'] = add_on_time_index
+
+        # Merge Add On and base
+        full_df = pd.concat([base_df, add_on], ignore_index=True)
+        full_df.set_index('timestamp', inplace=True)
+        
+        full_df.to_csv(f'ExtendedCSV\\{url_dest}_extended.csv', index=True, index_label='timestamp')
 
     def __repr__(self):
         return '\n'.join([
@@ -126,38 +166,6 @@ class WindowGenerator():
 
         plt.xlabel('Time [h]')
     
-    def extend_to_csv(self, model = None):
-        # Load edge data
-        input_section, label_section = next(iter(self.edge_data))
-
-        # Run Model
-        if (model is not None):
-            extended_data = model(label_section)[0].numpy()
-        else:
-            extended_data = [label_section.numpy()[-1][-1] for _ in range(self.label_width)]
-        
-        # Create Add-on Pandas Dataframe
-        base_df = self.orig_df
-        base_df['timestamp'] = self.date_time
-        base_df['modeled'] = False
-
-        add_on = pd.DataFrame(extended_data, columns=self.edge_df.columns)*self.train_std + self.train_mean
-        add_on['modeled'] = True
-
-        # Create timestamp index
-        start = max(self.date_time)
-        add_on_time_index = list()
-        for i in range(len(add_on)):
-            add_on_time_index.append(start + datetime.timedelta(hours=3*(i + 1)))
-        
-        add_on['timestamp'] = add_on_time_index
-
-        # Merge Add On and base
-        full_df = pd.concat([base_df, add_on], ignore_index=True)
-        full_df.set_index('timestamp', inplace=True)
-        
-        full_df.to_csv(f'ExtendedCSV\\{self.url_name}_extended.csv', index=True, index_label='timestamp')
-    
     def make_dataset(self, data):
         data = np.array(data, dtype=np.float32)
         ds = tf.keras.utils.timeseries_dataset_from_array(
@@ -165,7 +173,7 @@ class WindowGenerator():
             targets=None,
             sequence_length = self.total_window_size,
             sequence_stride=1,
-            shuffle=False,
+            shuffle=True,
             batch_size=32,)
         ds = ds.map(self.split_window)
 
@@ -196,15 +204,17 @@ class WindowGenerator():
             self._example = result
         return result
 
+@tf.keras.utils.register_keras_serializable()
 class FeedBack(tf.keras.Model):
     def __init__(self, units, out_steps, num_vars):
         super().__init__()
         self.out_steps = out_steps
         self.units = units
+        self.num_vars = num_vars
         self.lstm_cell = tf.keras.layers.LSTMCell(units)
         # Also wrap the LSTMCell in an RNN to simplify the `warmup` method.
         self.lstm_rnn = tf.keras.layers.RNN(self.lstm_cell, return_state=True)
-        self.dense = tf.keras.layers.Dense(num_vars)
+        self.dense = tf.keras.layers.Dense(self.num_vars)
 
     def warmup(self, inputs):
         # inputs.shape => (batch, time, features)
@@ -241,6 +251,12 @@ class FeedBack(tf.keras.Model):
         # predictions.shape => (batch, time, features)
         predictions = tf.transpose(predictions, [1, 0, 2])
         return predictions
+
+    def get_config(self):
+        config = dict()
+        config.update({'units': self.units, 'out_steps': self.out_steps, 'num_vars': self.num_vars})
+        return config
+
 
 def compile_and_fit(model, window, patience=2):
     early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss',
