@@ -7,7 +7,7 @@ import pandas as pd
 import tensorflow as tf
 import keras
 from sklearn.cluster import KMeans
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neighbors import KNeighborsRegressor
 
 
 MAX_EPOCS = 20
@@ -219,7 +219,7 @@ class RegressiveWindow():
         self.timeline = self.orig_df.pop('timestamp')
 
         # Split Data Up
-        self.train_df = self.orig_df.sample(frac=0.9, random_state=0)
+        self.train_df = self.orig_df.sample(frac=0.7, random_state=0)
         self.test_df = self.orig_df.drop(self.train_df.index)
 
         # Normalize Data
@@ -243,15 +243,15 @@ class RegressiveWindow():
     def model_compilation_and_fitting(self, model, patience=2):
         model.compile(loss=tf.keras.losses.MeanSquaredError(),
                       optimizer=tf.keras.optimizers.Adam(),
-                      metrics=[tf.keras.metrics.MeanAbsoluteError(), tf.keras.metrics.MeanSquaredError()])
+                      metrics=[tf.keras.metrics.MeanAbsoluteError()])
         
         history = model.fit(self.train_input, self.train_label, epochs=MAX_EPOCS,
-                            validation_split=2/9,
+                            # validation_split=2/9,
                             callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='min')])
         
         return history
 
-    def csv_extension(self, url_dest, model = None, out_steps = 100):
+    def csv_extension(self, url_dest, species, model = None, out_steps = 100):
         data = {
             'timestamp': [],
             'longitude': [],
@@ -265,7 +265,11 @@ class RegressiveWindow():
         avg_temp = self.orig_df.groupby(['month', 'day']).mean()['external-temperature']
 
         for i in range(out_steps):
-            curr_date = max(self.timeline) + datetime.timedelta(hours=3*(i+1))
+            assert species == 'Moose' or species == 'Deer'
+            if (species == 'Moose'):
+                curr_date = max(self.timeline) + datetime.timedelta(hours=3*(i+1))
+            elif (species == 'Deer'):
+                curr_date = max(self.timeline) + datetime.timedelta(hours=4*(i+1))
 
             external_temp = avg_temp[curr_date.month][curr_date.day]
             month = curr_date.month
@@ -298,9 +302,9 @@ class RegressiveWindow():
         
         combined_df = pd.concat([base_df, add_on_df], ignore_index=True)
 
-        combined_df = combined_df[['timestamp', 'month', 'day', 'external-temperature', 'longitude', 'latitude', 'altitude']]
+        combined_df = combined_df[['timestamp', 'month', 'day', 'external-temperature', 'longitude', 'latitude', 'altitude', 'modeled']]
 
-        combined_df.to_csv(f'ExtendedCSV/{url_dest}_extended.csv')
+        combined_df.to_csv(f'ExtendedCSV/{url_dest}_extended.csv', index=False)
 
 class ClassificationWindow():
     def __init__(self, csv_name, n_clusters):
@@ -313,7 +317,7 @@ class ClassificationWindow():
         self.timeline = self.orig_df.pop('timestamp')
 
         # Split Data Up
-        self.train_df = self.orig_df.sample(frac=0.9, random_state=0)
+        self.train_df = self.orig_df.sample(frac=0.7, random_state=0)
         self.test_df = self.orig_df.drop(self.train_df.index)
 
         # Normalize Data
@@ -350,15 +354,15 @@ class ClassificationWindow():
     def model_compilation_and_fitting(self, model, patience=2):
         model.compile(loss=tf.keras.losses.MeanSquaredError(),
                       optimizer=tf.keras.optimizers.Adam(),
-                      metrics=[tf.keras.metrics.MeanAbsoluteError(), tf.keras.metrics.MeanSquaredError()])
+                      metrics=[tf.keras.metrics.MeanAbsoluteError()])
         
         history = model.fit(self.train_input, self.train_label, epochs=MAX_EPOCS,
-                            validation_split=2/9,
+                            # validation_split=2/9,
                             callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='min')])
         
         return history
 
-    def csv_extension(self, url_dest, model = None, out_steps = 100):
+    def csv_extension(self, url_dest, species, model = None, out_steps = 100):
         data = {
             'timestamp': [],
             'longitude': [],
@@ -366,16 +370,21 @@ class ClassificationWindow():
             'altitude': [],
             'external-temperature': [],
             'month': [],
-            'day': []
+            'day': [],
+            'label': []
         }
 
         # Models for Temperature and Altitude
         avg_temp = self.orig_df.groupby(['month', 'day']).mean()['external-temperature']
-        altitude_model = KNeighborsClassifier(n_neighbors=5)
-        altitude_model.fit(self.norm_train_df[['longitude', 'latitude']].values, self.norm_train_df[['altitude']].values)
+        altitude_model = KNeighborsRegressor(n_neighbors=5)
+        altitude_model.fit(self.norm_train_df[['longitude', 'latitude']].values, self.norm_train_df['altitude'].values)
 
         for i in range(out_steps):
-            curr_date = max(self.timeline) + datetime.timedelta(hours=3*(i+1))
+            assert species == 'Moose' or species == 'Deer'
+            if (species == 'Moose'):
+                curr_date = max(self.timeline) + datetime.timedelta(hours=3*(i+1))
+            elif (species == 'Deer'):
+                curr_date = max(self.timeline) + datetime.timedelta(hours=4*(i+1))
 
             external_temp = avg_temp[curr_date.month][curr_date.day]
             month = curr_date.month
@@ -383,9 +392,9 @@ class ClassificationWindow():
 
             output_field = model(np.array([(external_temp - self.train_df.mean()['external-temperature'])/self.train_df.std()['external-temperature'], 
                                                (month - self.train_df.mean()['month'])/self.train_df.std()['month'], 
-                                               (day - self.train_df.mean()['day'])/self.train_df.std()['day']]))
+                                               (day - self.train_df.mean()['day'])/self.train_df.std()['day']]).reshape([1, 1, 3]))
 
-            label = output_field[0][0][0]
+            label = max(range(self.n_clusters), key = lambda x: output_field[0][0][x])
             point = self.clusters[label]*self.train_df[['longitude', 'latitude']].std() + self.train_df[['longitude', 'latitude']].mean()
 
             data['longitude'].append(point[0])
@@ -395,6 +404,7 @@ class ClassificationWindow():
             data['month'].append(curr_date.month)
             data['day'].append(curr_date.day)
             data['timestamp'].append(curr_date)
+            data['label'].append(label)
         
         add_on_df = pd.DataFrame(data)
         add_on_df['modeled'] = True
@@ -405,7 +415,7 @@ class ClassificationWindow():
 
         combined_df = pd.concat([base_df, add_on_df], ignore_index=True)
 
-        combined_df = combined_df[['timestamp', 'month', 'day', 'external-temperature', 'longitude', 'latitude', 'altitude', 'modeled']]
+        combined_df = combined_df[['timestamp', 'month', 'day', 'external-temperature', 'longitude', 'latitude', 'altitude','modeled']]
 
         combined_df.to_csv(f'ExtendedCSV/{url_dest}_extended.csv', index=False)
 
@@ -469,7 +479,7 @@ def compile_and_fit(model, window, patience=2):
     
     model.compile(loss=tf.keras.losses.MeanSquaredError(),
                   optimizer=tf.keras.optimizers.Adam(),
-                  metrics=[tf.keras.metrics.MeanAbsoluteError(), tf.keras.metrics.MeanSquaredError()])
+                  metrics=[tf.keras.metrics.MeanAbsoluteError()])
     
     history = model.fit(window.train, epochs=MAX_EPOCS,
                         validation_data=window.val,
